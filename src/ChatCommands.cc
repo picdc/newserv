@@ -3222,6 +3222,79 @@ ChatCommandDefinition cc_drop(
       co_return;
     });
 
+ChatCommandDefinition cc_npc(
+    {"$npc"},
+    +[](const Args& a) -> asio::awaitable<void> {
+      a.check_is_game(true);
+
+      auto l = a.c->require_lobby();
+
+      if (l->count_clients() != 1) {
+        throw precondition_failed("$C4NPCs only work in\nsingle-player games");
+      }
+      if (l->mode == GameMode::BATTLE || l->mode == GameMode::CHALLENGE) {
+        throw precondition_failed("$C4Not valid in battle\nor challenge mode");
+      }
+      if (l->check_flag(Lobby::Flag::QUEST_IN_PROGRESS)) {
+        throw precondition_failed("$C4Not valid during\na quest");
+      }
+      if (a.c->floor != 0) {
+        throw precondition_failed("$C4Must be on Pioneer 2");
+      }
+
+      auto tokens = phosg::split(a.text, ' ');
+      if (tokens.empty() || tokens.size() > 2) {
+        throw precondition_failed("$C4Usage: $npc <type 0-63>\n[slot 1-3]");
+      }
+
+      uint16_t npc_type = stoul(tokens[0], nullptr, 0);
+      if (npc_type > 63) {
+        throw precondition_failed("$C4NPC type must be 0-63");
+      }
+
+      uint16_t slot;
+      if (tokens.size() == 2) {
+        slot = stoul(tokens[1], nullptr, 0);
+        if (slot > 3) {
+          throw precondition_failed("$C4Slot must be 0-3");
+        }
+        if (l->clients[slot]) {
+          throw precondition_failed("$C4Slot is occupied");
+        }
+      } else {
+        // Auto-assign: iterate from slot 3 down (like Sylverant), skip player
+        slot = 0xFFFF;
+        for (int16_t i = 3; i >= 0; i--) {
+          if (!l->clients[i]) {
+            slot = i;
+            break;
+          }
+        }
+        if (slot == 0xFFFF) {
+          throw precondition_failed("$C4No free NPC slots");
+        }
+      }
+
+      // Build 6x69 subcommand (Sylverant-style, commands.c:1846)
+      // With DC/PC slot 1 fix, lobby_client_id=1 for the player.
+      // The active NPC appears in slot 0 and follows+fights correctly.
+      // A cosmetic ghost entity also appears in the specified slot.
+      uint8_t raw[0x0C];
+      memset(raw, 0, sizeof(raw));
+      raw[0] = 0x69;                          // subcommand type
+      raw[1] = 0x03;                          // size (in dwords)
+      raw[2] = 0x01;                          // flag 1
+      raw[3] = 0x01;                          // flag 2
+      raw[4] = a.c->lobby_client_id;          // state/follow (= 1 on DC/PC)
+      raw[6] = slot;                          // NPC entity slot
+      raw[10] = npc_type;                     // NPC template index
+
+      send_command(a.c, 0x60, 0x00, raw, sizeof(raw));
+      // No text message here — sending B0 immediately after 6x69 interferes
+      // with the client's NPC creation and causes a duplicate entity.
+      co_return;
+    });
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Dispatch methods
 
