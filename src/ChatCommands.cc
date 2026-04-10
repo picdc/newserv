@@ -3191,6 +3191,38 @@ ChatCommandDefinition cc_nativecall(
     });
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Solo play enhancements
+
+static void command_weapondrop(const Args& a, bool enable) {
+  a.check_is_game(true);
+  if (enable) {
+    G_EnableDropWeaponOnDeath_6x82 cmd;
+    cmd.header = {0x82, sizeof(cmd) >> 2, a.c->lobby_client_id};
+    send_command_t(a.c, 0x60, 0x00, cmd);
+    send_text_message(a.c, "$C7Weapon drop on death\nenabled");
+  } else {
+    G_DisableDropWeaponOnDeath_6x81 cmd;
+    cmd.header = {0x81, sizeof(cmd) >> 2, a.c->lobby_client_id};
+    send_command_t(a.c, 0x60, 0x00, cmd);
+    send_text_message(a.c, "$C7Weapon drop on death\ndisabled");
+  }
+}
+
+ChatCommandDefinition cc_nodrop(
+    {"$nodrop"},
+    +[](const Args& a) -> asio::awaitable<void> {
+      command_weapondrop(a, false);
+      co_return;
+    });
+
+ChatCommandDefinition cc_drop(
+    {"$drop"},
+    +[](const Args& a) -> asio::awaitable<void> {
+      command_weapondrop(a, true);
+      co_return;
+    });
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Dispatch methods
 
 struct SplitCommand {
