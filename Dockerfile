@@ -78,8 +78,10 @@ RUN apt update && apt install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
 WORKDIR /newserv
-COPY --from=data /newserv .
+COPY --from=data /newserv/system ./system-defaults
+COPY --from=data /newserv/system ./system
 COPY --from=newserv /usr/local /usr/local
+COPY docker-entrypoint.sh /usr/local/bin/
 
 USER root
 VOLUME /newserv/system
@@ -89,4 +91,5 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 
 # does not allow receiving any signal at the moment, so force kill the app
 STOPSIGNAL SIGKILL
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["newserv"]
