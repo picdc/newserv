@@ -65,7 +65,8 @@ FROM ${BASE_IMAGE} AS data
 WORKDIR /newserv
 COPY system/ ./system
 RUN cp -f system/config.example.json system/config.json && \
-    sed -i 's/"ExternalAddress": "[^"]*"/"ExternalAddress": "0.0.0.0"/' system/config.json
+    sed -i 's/"ExternalAddress": "[^"]*"/"ExternalAddress": "0.0.0.0"/' system/config.json && \
+    sed -i 's/"HTTPListen": \[\]/"HTTPListen": [8080]/' system/config.json
 
 # ---
 
@@ -73,6 +74,7 @@ FROM ${BASE_IMAGE} AS final
 
 RUN apt update && apt install -y --no-install-recommends \
     libasio-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
 WORKDIR /newserv
@@ -81,6 +83,9 @@ COPY --from=newserv /usr/local /usr/local
 
 USER root
 VOLUME /newserv/system
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD curl -sf http://localhost:8080/ || exit 1
 
 # does not allow receiving any signal at the moment, so force kill the app
 STOPSIGNAL SIGKILL
