@@ -223,6 +223,16 @@ Account::Account(const phosg::JSON& json)
     }
   } catch (const std::out_of_range&) {
   }
+
+  try {
+    for (const auto& it : json.get_list("PreferredNPCs")) {
+      uint8_t type = it->as_int();
+      if (type <= 63 && this->preferred_npcs.size() < 3) {
+        this->preferred_npcs.push_back(type);
+      }
+    }
+  } catch (const std::out_of_range&) {
+  }
 }
 
 phosg::JSON Account::json() const {
@@ -256,6 +266,11 @@ phosg::JSON Account::json() const {
     auto_patches_json.emplace_back(it);
   }
 
+  phosg::JSON preferred_npcs_json = phosg::JSON::list();
+  for (uint8_t type : this->preferred_npcs) {
+    preferred_npcs_json.emplace_back(static_cast<int>(type));
+  }
+
   return phosg::JSON::dict({
       {"FormatVersion", 1},
       {"AccountID", this->account_id},
@@ -274,6 +289,7 @@ phosg::JSON Account::json() const {
       {"Ep3TotalMesetaEarned", this->ep3_total_meseta_earned},
       {"BBTeamID", this->bb_team_id},
       {"AutoPatchesEnabled", std::move(auto_patches_json)},
+      {"PreferredNPCs", std::move(preferred_npcs_json)},
   });
 }
 
