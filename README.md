@@ -1,3 +1,7 @@
+# Fork
+
+This fork is purely about prototyping and proposing features the main project. You can have a look on what I'm working on but I cannot guarantee it is not broken or won't break your saves. Feel free to cherry-pick though!
+
 # newserv <img align="right" src="static/s-newserv.png" />
 
 newserv is a game server, proxy, and reverse-engineering tool for Phantasy Star Online (PSO). **To quickly get started using newserv, just read the [server setup](#server-setup) and [how to connect](#how-to-connect) sections.**
