@@ -1801,6 +1801,7 @@ template <typename LobbyDataT>
 void populate_lobby_data_for_client(LobbyDataT& ret, std::shared_ptr<const Client> c, std::shared_ptr<const Client> viewer_c) {
   ret.player_tag = 0x00010000;
   ret.guild_card_number = c->login->account->account_id;
+  ret.ip_address = 0xFFFFFFFF;
   ret.client_id = c->lobby_client_id;
   ret.name.encode(c->character_file()->disp.visual.name.decode(c->language()), viewer_c->language());
 }
