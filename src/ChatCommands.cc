@@ -3193,34 +3193,12 @@ ChatCommandDefinition cc_nativecall(
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Solo play enhancements
 
-static void command_weapondrop(const Args& a, bool enable) {
-  a.check_is_game(true);
-  if (enable) {
-    G_EnableDropWeaponOnDeath_6x82 cmd;
-    cmd.header = {0x82, sizeof(cmd) >> 2, a.c->lobby_client_id};
-    send_command_t(a.c, 0x60, 0x00, cmd);
-    send_text_message(a.c, "$C7Weapon drop on death\nenabled");
-  } else {
-    G_DisableDropWeaponOnDeath_6x81 cmd;
-    cmd.header = {0x81, sizeof(cmd) >> 2, a.c->lobby_client_id};
-    send_command_t(a.c, 0x60, 0x00, cmd);
-    send_text_message(a.c, "$C7Weapon drop on death\ndisabled");
-  }
-}
-
-ChatCommandDefinition cc_nodrop(
-    {"$nodrop"},
-    +[](const Args& a) -> asio::awaitable<void> {
-      command_weapondrop(a, false);
-      co_return;
-    });
-
-ChatCommandDefinition cc_drop(
-    {"$drop"},
-    +[](const Args& a) -> asio::awaitable<void> {
-      command_weapondrop(a, true);
-      co_return;
-    });
+// Note: $nodrop/$drop (6x81/6x82 send) does not work in freeplay on DC v2.
+// The 6x81 subcommand is meant to be sent FROM a client (via quest opcode
+// F80E) to inform others that a player does not drop weapons on death.
+// Sending it from the server to the client does not change the client's
+// own local flag. To disable weapon drop, include opcode F80E at the start
+// of custom quests (as Aleron Ives does in his Offline Quest Pack).
 
 ChatCommandDefinition cc_npc(
     {"$npc"},
