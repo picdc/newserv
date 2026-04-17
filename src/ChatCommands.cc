@@ -3258,14 +3258,14 @@ ChatCommandDefinition cc_npc(
         if (slot > 3) {
           throw precondition_failed("$C4Slot must be 0-3");
         }
-        if (l->clients[slot]) {
+        if (l->clients[slot] || (l->npc_slots & (1 << slot))) {
           throw precondition_failed("$C4Slot is occupied");
         }
       } else {
-        // Auto-assign: iterate from slot 3 down (like Sylverant), skip player
+        // Auto-assign: iterate from slot 3 down (like Sylverant), skip occupied
         slot = 0xFFFF;
         for (int16_t i = 3; i >= 0; i--) {
-          if (!l->clients[i]) {
+          if (!l->clients[i] && !(l->npc_slots & (1 << i))) {
             slot = i;
             break;
           }
@@ -3274,6 +3274,8 @@ ChatCommandDefinition cc_npc(
           throw precondition_failed("$C4No free NPC slots");
         }
       }
+
+      l->npc_slots |= (1 << slot);
 
       // Build 6x69 subcommand (Sylverant-style, commands.c:1846)
       // With DC/PC slot 1 fix, lobby_client_id=1 for the player.
