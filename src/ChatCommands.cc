@@ -3276,7 +3276,7 @@ ChatCommandDefinition cc_npc(
       co_return;
     });
 
-// $npcs: spawn the configured list of NPCs from AutoSpawnNPCsInSolo.
+// $npcs: spawn the player's preferred NPC list, or the server default if none.
 ChatCommandDefinition cc_npcs(
     {"$npcs"},
     +[](const Args& a) -> asio::awaitable<void> {
@@ -3296,14 +3296,21 @@ ChatCommandDefinition cc_npcs(
         throw precondition_failed("$C4Must be on Pioneer 2");
       }
 
-      auto s = a.c->require_server_state();
-      if (s->data->auto_spawn_npcs_in_solo.empty()) {
-        throw precondition_failed("$C4AutoSpawnNPCsInSolo\nis empty in config");
+      // Prefer the player's configured list, fall back to the server default.
+      const std::vector<uint8_t>* npc_list = nullptr;
+      if (a.c->login && !a.c->login->account->preferred_npcs.empty()) {
+        npc_list = &a.c->login->account->preferred_npcs;
+      } else {
+        auto s = a.c->require_server_state();
+        if (s->data->auto_spawn_npcs_in_solo.empty()) {
+          throw precondition_failed("$C4No NPCs configured.\nUse $setnpcs <t1> <t2>\n<t3> to set yours.");
+        }
+        npc_list = &s->data->auto_spawn_npcs_in_solo;
       }
 
       int16_t slot = 3;
       bool first = true;
-      for (uint8_t npc_type : s->data->auto_spawn_npcs_in_solo) {
+      for (uint8_t npc_type : *npc_list) {
         while (slot >= 0 && (l->clients[slot] || (l->npc_slots & (1 << slot)))) {
           slot--;
         }
@@ -3329,6 +3336,127 @@ ChatCommandDefinition cc_npcs(
         l->npc_slots |= (1 << slot);
         slot--;
         first = false;
+      }
+      co_return;
+    });
+
+// $create <name> [password] [difficulty]: create a new game directly from the
+// lobby, bypassing the PSO create-team dialog.
+// Difficulty is auto-detected: if token 2 parses as a difficulty keyword
+// (normal/hard/vhard/ultimate + aliases), it's used as the difficulty and
+// password is empty. Otherwise token 2 is the password and token 3 (optional)
+// is the difficulty.
+ChatCommandDefinition cc_create(
+    {"$create"},
+    +[](const Args& a) -> asio::awaitable<void> {
+      a.check_is_proxy(false);
+      a.check_is_game(false); // must be in a chat lobby, not a game
+
+      auto tokens = phosg::split(a.text, ' ');
+      if (tokens.empty() || tokens[0].empty()) {
+        throw precondition_failed("$C4Usage:\n$create <name>\n[pwd] [difficulty]");
+      }
+      std::string name = tokens[0];
+
+      auto parse_diff = [](const std::string& s, Difficulty* out) -> bool {
+        std::string lower;
+        lower.reserve(s.size());
+        for (char c : s) {
+          lower.push_back(std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (lower == "n" || lower == "normal" || lower == "0") {
+          *out = Difficulty::NORMAL;
+          return true;
+        }
+        if (lower == "h" || lower == "hard" || lower == "1") {
+          *out = Difficulty::HARD;
+          return true;
+        }
+        if (lower == "v" || lower == "vh" || lower == "vhard" || lower == "veryhard" || lower == "2") {
+          *out = Difficulty::VERY_HARD;
+          return true;
+        }
+        if (lower == "u" || lower == "ult" || lower == "ultimate" || lower == "3") {
+          *out = Difficulty::ULTIMATE;
+          return true;
+        }
+        return false;
+      };
+
+      std::string password;
+      Difficulty difficulty = Difficulty::NORMAL;
+      if (tokens.size() >= 2) {
+        if (parse_diff(tokens[1], &difficulty)) {
+          // token 2 is a difficulty; password remains empty.
+        } else {
+          password = tokens[1];
+          if (tokens.size() >= 3 && !parse_diff(tokens[2], &difficulty)) {
+            throw precondition_failed("$C4Invalid difficulty\n(normal/hard/vhard/\nultimate)");
+          }
+        }
+      }
+
+      if (name.size() > 15) {
+        throw precondition_failed("$C4Name too long (max 15)");
+      }
+      if (password.size() > 15) {
+        throw precondition_failed("$C4Password too long\n(max 15)");
+      }
+
+      auto s = a.c->require_server_state();
+      Episode episode = Episode::EP1;
+      bool allow_v1 = is_v1_or_v2(a.c->version());
+
+      auto game = create_game_generic(
+          s, a.c, name, password, episode, GameMode::NORMAL,
+          difficulty, allow_v1);
+      if (!game) {
+        // create_game_generic already sent a message box if level too low;
+        // no need to add a generic "Failed to create game" on top.
+        co_return;
+      }
+      s->change_client_lobby(a.c, game);
+      a.c->set_flag(Client::Flag::LOADING);
+      a.c->log.info_f("LOADING flag set (via $create)");
+      if (is_pre_v1(a.c->version())) {
+        a.c->set_flag(Client::Flag::SHOULD_SEND_ARTIFICIAL_ITEM_STATE);
+      }
+      co_return;
+    });
+
+// $setnpcs <type1> [type2] [type3]: save the player's preferred NPC list.
+// $setnpcs (no args): clear preferences, fall back to server default.
+ChatCommandDefinition cc_setnpcs(
+    {"$setnpcs"},
+    +[](const Args& a) -> asio::awaitable<void> {
+      if (!a.c->login) {
+        throw precondition_failed("$C4Not logged in");
+      }
+      auto tokens = phosg::split(a.text, ' ');
+      std::vector<uint8_t> npcs;
+      for (const auto& tok : tokens) {
+        if (tok.empty()) {
+          continue;
+        }
+        uint32_t type = stoul(tok, nullptr, 0);
+        if (type > 63) {
+          throw precondition_failed("$C4NPC types must be 0-63");
+        }
+        if (npcs.size() >= 3) {
+          throw precondition_failed("$C4Maximum 3 NPCs");
+        }
+        npcs.push_back(static_cast<uint8_t>(type));
+      }
+      a.c->login->account->preferred_npcs = std::move(npcs);
+      a.c->login->account->save();
+      if (a.c->login->account->preferred_npcs.empty()) {
+        send_text_message(a.c, "$C7NPC preferences\ncleared");
+      } else {
+        std::string msg = "$C7Saved NPCs:";
+        for (uint8_t t : a.c->login->account->preferred_npcs) {
+          msg += " " + std::to_string(t);
+        }
+        send_text_message(a.c, msg);
       }
       co_return;
     });
