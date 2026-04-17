@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "AsyncUtils.hh"
 #include "Client.hh"
 #include "GameServer.hh"
 #include "Lobby.hh"
@@ -3272,6 +3273,63 @@ ChatCommandDefinition cc_npc(
       send_command(a.c, 0x60, 0x00, raw, sizeof(raw));
       // No text message here — sending B0 immediately after 6x69 interferes
       // with the client's NPC creation and causes a duplicate entity.
+      co_return;
+    });
+
+// $npcs: spawn the configured list of NPCs from AutoSpawnNPCsInSolo.
+ChatCommandDefinition cc_npcs(
+    {"$npcs"},
+    +[](const Args& a) -> asio::awaitable<void> {
+      a.check_is_game(true);
+      auto l = a.c->require_lobby();
+
+      if (l->count_clients() != 1) {
+        throw precondition_failed("$C4NPCs only work in\nsingle-player games");
+      }
+      if (l->mode == GameMode::BATTLE || l->mode == GameMode::CHALLENGE) {
+        throw precondition_failed("$C4Not valid in battle\nor challenge mode");
+      }
+      if (l->check_flag(Lobby::Flag::QUEST_IN_PROGRESS)) {
+        throw precondition_failed("$C4Not valid during\na quest");
+      }
+      if (a.c->floor != 0) {
+        throw precondition_failed("$C4Must be on Pioneer 2");
+      }
+
+      auto s = a.c->require_server_state();
+      if (s->data->auto_spawn_npcs_in_solo.empty()) {
+        throw precondition_failed("$C4AutoSpawnNPCsInSolo\nis empty in config");
+      }
+
+      int16_t slot = 3;
+      bool first = true;
+      for (uint8_t npc_type : s->data->auto_spawn_npcs_in_solo) {
+        while (slot >= 0 && (l->clients[slot] || (l->npc_slots & (1 << slot)))) {
+          slot--;
+        }
+        if (slot < 0) {
+          break;
+        }
+        if (!first) {
+          // Give the client time to process the previous NPC spawn before
+          // sending the next. Sending multiple 6x69 back-to-back causes the
+          // client to create "ghost" NPCs with default/generic data.
+          co_await async_sleep(std::chrono::milliseconds(500));
+        }
+        uint8_t raw[0x0C];
+        memset(raw, 0, sizeof(raw));
+        raw[0] = 0x69;
+        raw[1] = 0x03;
+        raw[2] = 0x01;
+        raw[3] = 0x01;
+        raw[4] = a.c->lobby_client_id;
+        raw[6] = slot;
+        raw[10] = npc_type;
+        send_command(a.c, 0x60, 0x00, raw, sizeof(raw));
+        l->npc_slots |= (1 << slot);
+        slot--;
+        first = false;
+      }
       co_return;
     });
 

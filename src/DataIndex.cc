@@ -883,6 +883,17 @@ void DataIndex::load_config_early() {
   this->exp_share_multiplier = this->config_json->get_float("BBEXPShareMultiplier", 0.5f);
   this->server_global_drop_rate_multiplier = this->config_json->get_float("ServerGlobalDropRateMultiplier", 1.0f);
 
+  this->auto_spawn_npcs_in_solo.clear();
+  try {
+    for (const auto& item : this->config_json->at("AutoSpawnNPCsInSolo").as_list()) {
+      uint8_t type = item->as_int();
+      if (type <= 63) {
+        this->auto_spawn_npcs_in_solo.push_back(type);
+      }
+    }
+  } catch (const std::out_of_range&) {
+  }
+
   if (this->is_debug) {
     set_all_log_levels(phosg::LogLevel::L_DEBUG);
   } else {

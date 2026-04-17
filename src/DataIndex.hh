@@ -257,6 +257,7 @@ struct DataIndex {
   float bb_global_exp_multiplier = 1.0f;
   float exp_share_multiplier = 0.5f;
   float server_global_drop_rate_multiplier = 1.0f;
+  std::vector<uint8_t> auto_spawn_npcs_in_solo; // NPC types to auto-spawn on Pioneer 2 in solo games
 
   uint16_t ep3_card_auction_points = 0;
   uint16_t ep3_card_auction_min_size = 0;
