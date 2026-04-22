@@ -40,7 +40,7 @@
 #       the human as the EXP recipient.
 #
 # Globals used :
-#   0x8C428D48 : u32 LOCAL_CLIENT_SLOT (0..3, usually 1 on DC/PC)
+#   0x8C428D48 : u32 LOCAL_CLIENT_SLOT (0..3, slot of the local human player)
 #   0x8C42D92C : TObjPlayer* player_array[4]
 #
 # Block 1 overwrites the original 12-byte epilogue at 0x8C012980 with a

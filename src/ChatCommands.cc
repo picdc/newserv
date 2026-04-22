@@ -3257,16 +3257,16 @@ ChatCommandDefinition cc_npc(
       l->npc_slots |= (1 << slot);
 
       // Build 6x69 subcommand (Sylverant-style, commands.c:1846)
-      // With DC/PC slot 1 fix, lobby_client_id=1 for the player.
-      // The active NPC appears in slot 0 and follows+fights correctly.
-      // A cosmetic ghost entity also appears in the specified slot.
+      // raw[4] = lobby_client_id (state/follow target = player slot)
+      // raw[6] = NPC entity slot (0-3)
+      // raw[10] = NPC template index (0-63)
       uint8_t raw[0x0C];
       memset(raw, 0, sizeof(raw));
       raw[0] = 0x69;                          // subcommand type
       raw[1] = 0x03;                          // size (in dwords)
       raw[2] = 0x01;                          // flag 1
       raw[3] = 0x01;                          // flag 2
-      raw[4] = a.c->lobby_client_id;          // state/follow (= 1 on DC/PC)
+      raw[4] = a.c->lobby_client_id;          // state/follow target (player slot)
       raw[6] = slot;                          // NPC entity slot
       raw[10] = npc_type;                     // NPC template index
 
