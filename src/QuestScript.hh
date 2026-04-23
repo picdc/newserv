@@ -2,6 +2,9 @@
 
 #include <stdint.h>
 
+#include <optional>
+#include <set>
+
 #include <phosg/Encoding.hh>
 #include <phosg/Tools.hh>
 
@@ -156,3 +159,13 @@ AssembledQuestScript assemble_quest_script(
     bool strict = true);
 
 void populate_quest_metadata_from_script(QuestMetadata& meta, const void* data, size_t size, Version version, Language language);
+
+// Scans a quest script for NPC-spawn opcodes (npc_crt, npc_crp, npc_crtpk,
+// npc_crppk, npc_crptalk, npc_crp_id, npc_crptalk_id) and returns the set of
+// slots (0-3) that those opcodes target.
+//
+// Returns std::nullopt if the script uses a dynamic (non-literal) slot value
+// for any spawn — the caller should treat that as "unknown" and decide its
+// own fallback policy.
+std::optional<std::set<uint8_t>> extract_npc_spawn_slots(
+    const void* bin_data, size_t bin_size, Version version);

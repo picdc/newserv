@@ -4,9 +4,11 @@
 #include <string.h>
 
 #include <filesystem>
+#include <optional>
 #include <phosg/Random.hh>
 #include <phosg/Strings.hh>
 #include <phosg/Time.hh>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -3201,6 +3203,20 @@ ChatCommandDefinition cc_nativecall(
 // own local flag. To disable weapon drop, include opcode F80E at the start
 // of custom quests (as Aleron Ives does in his Offline Quest Pack).
 
+// Returns the set of slots (0-3) that the lobby's current quest script will
+// spawn its own NPCs in. Empty set if no quest. std::nullopt if a quest is
+// loaded but the scan was indeterminate (dynamic slot values).
+static std::optional<std::set<uint8_t>> get_quest_claimed_npc_slots(std::shared_ptr<Lobby> l, std::shared_ptr<Client> c) {
+  if (!l->quest) {
+    return std::set<uint8_t>{};
+  }
+  auto vq = l->quest->version(c->version(), c->language());
+  if (!vq || !vq->bin_contents || vq->bin_contents->empty()) {
+    return std::set<uint8_t>{};
+  }
+  return extract_npc_spawn_slots(vq->bin_contents->data(), vq->bin_contents->size(), c->version());
+}
+
 ChatCommandDefinition cc_npc(
     {"$npc"},
     +[](const Args& a) -> asio::awaitable<void> {
@@ -3214,12 +3230,6 @@ ChatCommandDefinition cc_npc(
       if (l->mode == GameMode::BATTLE || l->mode == GameMode::CHALLENGE) {
         throw precondition_failed("$C4Not valid in battle\nor challenge mode");
       }
-      if (l->check_flag(Lobby::Flag::QUEST_IN_PROGRESS)) {
-        throw precondition_failed("$C4Not valid during\na quest");
-      }
-      if (a.c->floor != 0) {
-        throw precondition_failed("$C4Must be on Pioneer 2");
-      }
 
       auto tokens = phosg::split(a.text, ' ');
       if (tokens.empty() || tokens.size() > 2) {
@@ -3231,20 +3241,31 @@ ChatCommandDefinition cc_npc(
         throw precondition_failed("$C4NPC type must be 0-63");
       }
 
+      // If a quest is active, avoid slots it will use. Empty set = no quest / no conflict;
+      // nullopt = scan indeterminate — we log and allow (user can override with explicit slot).
+      auto quest_slots_opt = get_quest_claimed_npc_slots(l, a.c);
+      if (!quest_slots_opt.has_value()) {
+        a.c->log.info_f("[$npc] quest slot scan indeterminate, allowing spawn");
+      }
+      const auto& quest_slots = quest_slots_opt.value_or(std::set<uint8_t>{});
+
       uint16_t slot;
       if (tokens.size() == 2) {
         slot = stoul(tokens[1], nullptr, 0);
         if (slot > 3) {
           throw precondition_failed("$C4Slot must be 0-3");
         }
-        if (l->clients[slot] || (l->npc_slots & (1 << slot))) {
+        if (l->clients[slot] || l->npc_types[slot] >= 0) {
           throw precondition_failed("$C4Slot is occupied");
         }
+        if (quest_slots.count(static_cast<uint8_t>(slot))) {
+          throw precondition_failed("$C4Slot reserved\nby the quest");
+        }
       } else {
-        // Auto-assign: iterate from slot 3 down (like Sylverant), skip occupied
+        // Auto-assign: iterate from slot 3 down (like Sylverant), skip occupied + quest-claimed
         slot = 0xFFFF;
         for (int16_t i = 3; i >= 0; i--) {
-          if (!l->clients[i] && !(l->npc_slots & (1 << i))) {
+          if (!l->clients[i] && l->npc_types[i] < 0 && !quest_slots.count(static_cast<uint8_t>(i))) {
             slot = i;
             break;
           }
@@ -3254,7 +3275,7 @@ ChatCommandDefinition cc_npc(
         }
       }
 
-      l->npc_slots |= (1 << slot);
+      l->npc_types[slot] = static_cast<int8_t>(npc_type);
 
       // Build 6x69 subcommand (Sylverant-style, commands.c:1846)
       // raw[4] = lobby_client_id (state/follow target = player slot)
@@ -3289,12 +3310,6 @@ ChatCommandDefinition cc_npcs(
       if (l->mode == GameMode::BATTLE || l->mode == GameMode::CHALLENGE) {
         throw precondition_failed("$C4Not valid in battle\nor challenge mode");
       }
-      if (l->check_flag(Lobby::Flag::QUEST_IN_PROGRESS)) {
-        throw precondition_failed("$C4Not valid during\na quest");
-      }
-      if (a.c->floor != 0) {
-        throw precondition_failed("$C4Must be on Pioneer 2");
-      }
 
       // Prefer the player's configured list, fall back to the server default.
       const std::vector<uint8_t>* npc_list = nullptr;
@@ -3308,10 +3323,17 @@ ChatCommandDefinition cc_npcs(
         npc_list = &s->data->auto_spawn_npcs_in_solo;
       }
 
+      // Skip slots the quest will use. Empty set if no quest; scan failure logs + allows.
+      auto quest_slots_opt = get_quest_claimed_npc_slots(l, a.c);
+      if (!quest_slots_opt.has_value()) {
+        a.c->log.info_f("[$npcs] quest slot scan indeterminate, allowing spawn");
+      }
+      const auto& quest_slots = quest_slots_opt.value_or(std::set<uint8_t>{});
+
       int16_t slot = 3;
       bool first = true;
       for (uint8_t npc_type : *npc_list) {
-        while (slot >= 0 && (l->clients[slot] || (l->npc_slots & (1 << slot)))) {
+        while (slot >= 0 && (l->clients[slot] || l->npc_types[slot] >= 0 || quest_slots.count(static_cast<uint8_t>(slot)))) {
           slot--;
         }
         if (slot < 0) {
@@ -3333,7 +3355,7 @@ ChatCommandDefinition cc_npcs(
         raw[6] = slot;
         raw[10] = npc_type;
         send_command(a.c, 0x60, 0x00, raw, sizeof(raw));
-        l->npc_slots |= (1 << slot);
+        l->npc_types[slot] = static_cast<int8_t>(npc_type);
         slot--;
         first = false;
       }

@@ -5644,3 +5644,136 @@ void populate_quest_metadata_from_script(
     }
   }
 }
+
+std::optional<std::set<uint8_t>> extract_npc_spawn_slots(
+    const void* bin_data, size_t bin_size, Version version) {
+  // Disassemble the quest script and scan for NPC-spawn opcodes to identify
+  // which client IDs (slots 0-3) the quest will occupy with its own NPCs.
+  //
+  // Per the opcode documentation in this file (see around line 625 and
+  // following), the slot handling differs by opcode:
+  //   npc_crt         (0x60): hardcoded client ID 1
+  //   npc_crp         (0x66): hardcoded client ID 1; regsA[5] = template_index
+  //   npc_crtpk       (0x7B): hardcoded client ID 1
+  //   npc_crppk       (0x7C): hardcoded client ID 1 (attacker variant of crp)
+  //   npc_crptalk     (0x7D): hardcoded client ID 1
+  //   npc_crp_id      (0x7F): variable slot at regsA[5]; regsA[6] = template
+  //   npc_crptalk_id  (0xCE): variable slot at regsA[6]; regsA[5] = template
+  //
+  // For hardcoded-slot opcodes, we add 1 to the set unconditionally.
+  // For variable-slot opcodes (regs[N] = client ID), we look backward for a
+  // `leti rX, imm` that sets the register at `first_reg + N` where first_reg
+  // is the start of the rLL-rHH range in the opcode arguments.
+  std::string disasm;
+  try {
+    disasm = disassemble_quest_script(bin_data, bin_size, version, Language::UNKNOWN, nullptr, false, false);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+
+  // Slot index within the register range (-1 = hardcoded slot 1).
+  auto slot_index_for = [](const std::string& mnem) -> int {
+    if (mnem == "npc_crp_id") return 5;
+    if (mnem == "npc_crptalk_id") return 6;
+    if (mnem == "npc_crp" || mnem == "npc_crtpk" || mnem == "npc_crt" ||
+        mnem == "npc_crppk" || mnem == "npc_crptalk") return -1;
+    return -999;
+  };
+
+  std::set<uint8_t> slots;
+  std::vector<std::string> lines;
+  {
+    size_t start = 0;
+    for (size_t i = 0; i <= disasm.size(); i++) {
+      if (i == disasm.size() || disasm[i] == '\n') {
+        lines.emplace_back(disasm.substr(start, i - start));
+        start = i + 1;
+      }
+    }
+  }
+
+  auto extract_mnemonic_and_args = [](const std::string& line) -> std::pair<std::string, std::string> {
+    size_t i = 0;
+    while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) i++;
+    if (i + 4 > line.size()) return {"", ""};
+    size_t addr_end = i;
+    while (addr_end < line.size() && !std::isspace(static_cast<unsigned char>(line[addr_end]))) addr_end++;
+    size_t hex_start = addr_end;
+    while (hex_start < line.size() && std::isspace(static_cast<unsigned char>(line[hex_start]))) hex_start++;
+    size_t hex_end = hex_start;
+    while (hex_end < line.size() && !std::isspace(static_cast<unsigned char>(line[hex_end]))) hex_end++;
+    size_t mnem_start = hex_end;
+    while (mnem_start < line.size() && std::isspace(static_cast<unsigned char>(line[mnem_start]))) mnem_start++;
+    size_t mnem_end = mnem_start;
+    while (mnem_end < line.size() && !std::isspace(static_cast<unsigned char>(line[mnem_end]))) mnem_end++;
+    std::string mnem = line.substr(mnem_start, mnem_end - mnem_start);
+    size_t args_start = mnem_end;
+    while (args_start < line.size() && std::isspace(static_cast<unsigned char>(line[args_start]))) args_start++;
+    return {mnem, line.substr(args_start)};
+  };
+
+  auto parse_leti = [](const std::string& args) -> std::pair<uint16_t, uint32_t> {
+    if (args.size() < 3 || args[0] != 'r') return {0xFFFF, 0};
+    size_t comma = args.find(',');
+    if (comma == std::string::npos) return {0xFFFF, 0};
+    uint16_t reg = 0;
+    try {
+      reg = std::stoul(args.substr(1, comma - 1));
+    } catch (...) { return {0xFFFF, 0}; }
+    size_t imm_start = comma + 1;
+    while (imm_start < args.size() && std::isspace(static_cast<unsigned char>(args[imm_start]))) imm_start++;
+    try {
+      return {reg, static_cast<uint32_t>(std::stoul(args.substr(imm_start), nullptr, 0))};
+    } catch (...) { return {0xFFFF, 0}; }
+  };
+
+  // Parse "rLL-rHH" and return LL (the first register of the range).
+  auto parse_reg_set_first = [](const std::string& args) -> uint16_t {
+    if (args.size() < 5 || args[0] != 'r') return 0xFFFF;
+    size_t dash = args.find('-');
+    if (dash == std::string::npos) return 0xFFFF;
+    try {
+      return std::stoul(args.substr(1, dash - 1));
+    } catch (...) { return 0xFFFF; }
+  };
+
+  for (size_t i = 0; i < lines.size(); i++) {
+    auto [mnem, args] = extract_mnemonic_and_args(lines[i]);
+    if (mnem.empty()) continue;
+
+    int slot_idx = slot_index_for(mnem);
+    if (slot_idx == -999) continue;  // not an NPC-spawn opcode
+
+    if (slot_idx == -1) {
+      // Hardcoded client ID 1 (npc_crp, npc_crt, npc_crtpk, npc_crppk, npc_crptalk).
+      slots.insert(1);
+      continue;
+    }
+
+    // Variable-slot opcode: find the first register of the range, then
+    // look backward for `leti r(first+slot_idx), imm`.
+    uint16_t first_reg = parse_reg_set_first(args);
+    if (first_reg == 0xFFFF) return std::nullopt;
+    uint16_t slot_reg = first_reg + static_cast<uint16_t>(slot_idx);
+
+    bool found = false;
+    for (size_t back = i; back-- > 0;) {
+      auto [prev_mnem, prev_args] = extract_mnemonic_and_args(lines[back]);
+      if (prev_mnem != "leti") continue;
+      auto [reg, val] = parse_leti(prev_args);
+      if (reg == slot_reg) {
+        if (val <= 3) {
+          slots.insert(static_cast<uint8_t>(val));
+        }
+        found = true;
+        break;
+      }
+      if (i - back > 30) break;
+    }
+    if (!found) {
+      return std::nullopt;
+    }
+  }
+
+  return slots;
+}

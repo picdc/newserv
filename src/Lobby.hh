@@ -127,7 +127,8 @@ struct Lobby : public std::enable_shared_from_this<Lobby> {
   uint32_t random_seed = 0;
   std::shared_ptr<RandomGenerator> rand_crypt;
   uint8_t allowed_drop_modes = 0x1F;
-  uint8_t npc_slots = 0; // Bitmask of slots occupied by NPCs (from $npc command)
+  // NPC type per slot (0..63 = NPC template index, -1 = slot free of $npc NPC).
+  std::array<int8_t, 4> npc_types = {-1, -1, -1, -1};
   ServerDropMode drop_mode = ServerDropMode::CLIENT;
   std::shared_ptr<ItemCreator> item_creator; // Always null for lobbies, never null for games
 
