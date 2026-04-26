@@ -211,6 +211,14 @@ public:
   std::shared_ptr<AsyncPromise<GetPlayerInfoResult>> character_data_ready_promise;
   std::shared_ptr<AsyncPromise<void>> enable_save_promise;
 
+  // Bitmap of quest_flags bits modified server-side since the last
+  // load_all_files() / load_backup_character() reset. Used by $savechar to
+  // merge server-side $qset/$qclear and 6x75-tracked changes back into the
+  // client's RAM dump (cmd 0x30) without losing or re-introducing flags
+  // toggled by the client's BIN scripts. Same layout as
+  // PSOBBCharacterFile::quest_flags (4 difficulties × 0x400 bits).
+  QuestFlags quest_flags_modified;
+
   // File loading state
   std::unordered_map<std::string, std::shared_ptr<const std::string>> sending_files;
 

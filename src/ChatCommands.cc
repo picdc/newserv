@@ -505,6 +505,24 @@ static asio::awaitable<void> server_command_bbchar_savechar(const Args& a, bool 
       }
     }
     if (ch.character) {
+      // Merge server-tracked quest_flags into the cmd 0x30 dump. For each bit
+      // recorded in quest_flags_modified (touched by $qset/$qclear or by 6x75
+      // received from a quest BIN's gset/gclear), override the dump value with
+      // the server's character_file value. Untracked bits keep the dump's
+      // value, preserving the client RAM state for fields the server never saw.
+      // This handles BOTH set and clear operations correctly (a plain OR would
+      // drop server-side gclears).
+      auto server_char = a.c->character_file(false, false);
+      if (server_char) {
+        for (size_t diff = 0; diff < 4; ++diff) {
+          auto& dst = ch.character->quest_flags.data[diff].data;
+          const auto& src = server_char->quest_flags.data[diff].data;
+          const auto& mask = a.c->quest_flags_modified.data[diff].data;
+          for (size_t i = 0; i < dst.size(); ++i) {
+            dst[i] = (dst[i] & ~mask[i]) | (src[i] & mask[i]);
+          }
+        }
+      }
       try {
         Client::save_character_file(filename, a.c->system_file(), ch.character);
         send_text_message(a.c, "$C7Character data saved\n(full save file)");
@@ -545,6 +563,15 @@ static asio::awaitable<void> server_command_bbchar_savechar(const Args& a, bool 
       bb_player->battle_records = ch.character->battle_records;
       bb_player->challenge_records = ch.character->challenge_records;
       bb_player->choice_search_config = ch.character->choice_search_config;
+
+      // Copy server-side quest_flags (e.g., from $qset). The basic-only path
+      // doesn't get them from the client at all, so this is the only chance to
+      // persist them. character_file()->quest_flags is empty by default for non-BB
+      // and only gets populated by chat commands or quest scripts.
+      auto server_char_basic = a.c->character_file(false, false);
+      if (server_char_basic) {
+        bb_player->quest_flags = server_char_basic->quest_flags;
+      }
 
       try {
         Client::save_character_file(filename, a.c->system_file(), bb_player);
@@ -2027,6 +2054,9 @@ static void command_qset_qclear(const Args& a, bool should_set) {
       } else {
         p->quest_flags.clear(l->difficulty, flag_num);
       }
+      // Track this bit as server-modified so $savechar's merge will override
+      // the client's cmd 0x30 dump value (whether set or cleared) for this flag.
+      a.c->quest_flags_modified.set(l->difficulty, flag_num);
     }
   }
 

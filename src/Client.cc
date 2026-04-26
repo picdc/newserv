@@ -1090,6 +1090,10 @@ void Client::load_backup_character(uint32_t account_id, size_t index) {
   this->character_data = PSOCHARFile::load_shared(filename, false).character_file;
   this->update_character_data_after_load(this->character_data);
   this->v1_v2_last_reported_disp.reset();
+  // The freshly-loaded character_file is the new baseline for $savechar's merge.
+  for (size_t i = 0; i < this->quest_flags_modified.data.size(); i++) {
+    this->quest_flags_modified.data[i].update_all(false);
+  }
 }
 
 std::shared_ptr<PSOGCEp3CharacterFile::Character> Client::load_ep3_backup_character(uint32_t account_id, size_t index) {
@@ -1099,6 +1103,9 @@ std::shared_ptr<PSOGCEp3CharacterFile::Character> Client::load_ep3_backup_charac
   this->ep3_config = std::make_shared<Episode3::PlayerConfig>(ch->ep3_config);
   this->update_character_data_after_load(this->character_data);
   this->v1_v2_last_reported_disp.reset();
+  for (size_t i = 0; i < this->quest_flags_modified.data.size(); i++) {
+    this->quest_flags_modified.data[i].update_all(false);
+  }
   return ch;
 }
 

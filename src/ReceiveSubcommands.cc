@@ -3083,18 +3083,23 @@ static void on_set_quest_flag(std::shared_ptr<Client> c, SubcommandMessage& msg)
     l->quest_flag_values->clear(difficulty, flag_num);
   }
 
-  if (c->version() == Version::BB_V4) {
-    auto s = c->require_server_state();
-    // TODO: Should we allow overlays here?
-    auto p = c->character_file(true, false);
-    if (should_set) {
-      c->log.info_f("Setting quest flag {}:{:04X}", name_for_difficulty(difficulty), flag_num);
-      p->quest_flags.set(difficulty, flag_num);
-    } else {
-      c->log.info_f("Clearing quest flag {}:{:04X}", name_for_difficulty(difficulty), flag_num);
-      p->quest_flags.clear(difficulty, flag_num);
-    }
+  // Mirror the broadcast into the server-side character_file so it can be
+  // persisted by $savechar without losing flags toggled by quest BIN scripts.
+  // Originally only BB did this (its character_file IS the persistent save).
+  // Extended to all versions to keep DC/PC/GC character_file in sync with the
+  // client's RAM view of quest_flags. The quest_flags_modified mask records
+  // which bits the server has tracked, used by $savechar to override only
+  // those when merging with the cmd 0x30 dump.
+  // TODO: Should we allow overlays here?
+  auto p = c->character_file(true, false);
+  if (should_set) {
+    c->log.info_f("Setting quest flag {}:{:04X}", name_for_difficulty(difficulty), flag_num);
+    p->quest_flags.set(difficulty, flag_num);
+  } else {
+    c->log.info_f("Clearing quest flag {}:{:04X}", name_for_difficulty(difficulty), flag_num);
+    p->quest_flags.clear(difficulty, flag_num);
   }
+  c->quest_flags_modified.set(difficulty, flag_num);
 
   forward_subcommand(c, msg);
 
