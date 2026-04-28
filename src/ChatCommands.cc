@@ -1559,16 +1559,31 @@ ChatCommandDefinition cc_loadchar(
       auto s = a.c->require_server_state();
       auto l = a.c->require_lobby();
 
-      size_t index = stoull(a.text, nullptr, 0) - 1;
-      if (index >= s->data->num_backup_character_slots) {
-        throw precondition_failed("$C6Player index must\nbe in range 1-{}", s->data->num_backup_character_slots);
-      }
-
       std::shared_ptr<PSOGCEp3CharacterFile::Character> ep3_char;
-      if (is_ep3(a.c->version())) {
-        ep3_char = a.c->load_ep3_backup_character(a.c->login->account->account_id, index);
+      if (a.text == "auto") {
+        // Load the most recent timestamped auto-save (see ReceiveCommands.cc
+        // trigger_auto_save). Filename namespace is distinct from the
+        // numbered $savechar slots, so they don't collide.
+        std::string filename = Client::find_latest_auto_backup(
+            a.c->login->account->account_id, is_ep3(a.c->version()));
+        if (filename.empty()) {
+          throw precondition_failed("$C6No auto-save\nfound for this\naccount");
+        }
+        if (is_ep3(a.c->version())) {
+          ep3_char = a.c->load_ep3_backup_character_from_filename(filename);
+        } else {
+          a.c->load_backup_character_from_filename(filename);
+        }
       } else {
-        a.c->load_backup_character(a.c->login->account->account_id, index);
+        size_t index = stoull(a.text, nullptr, 0) - 1;
+        if (index >= s->data->num_backup_character_slots) {
+          throw precondition_failed("$C6Player index must\nbe in range 1-{}", s->data->num_backup_character_slots);
+        }
+        if (is_ep3(a.c->version())) {
+          ep3_char = a.c->load_ep3_backup_character(a.c->login->account->account_id, index);
+        } else {
+          a.c->load_backup_character(a.c->login->account->account_id, index);
+        }
       }
 
       if (a.c->version() == Version::BB_V4) {

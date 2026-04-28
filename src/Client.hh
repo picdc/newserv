@@ -91,6 +91,9 @@ public:
     PROXY_EP3_INFINITE_TIME_ENABLED            = 0x0000020000000000,
     PROXY_BLOCK_FUNCTION_CALLS                 = 0x0000040000000000,
     PROXY_EP3_UNMASK_WHISPERS                  = 0x0000080000000000,
+
+    // Auto-save bookkeeping (server-side only; see ReceiveCommands.cc on_61_98 / on_84)
+    SHOULD_AUTO_SAVE                           = 0x0000200000000000,
     // clang-format on
   };
   enum class ItemDropNotificationMode {
@@ -308,6 +311,17 @@ public:
 
   static std::string character_filename(const std::string& bb_username, ssize_t index);
   static std::string backup_character_filename(uint32_t account_id, size_t index, bool is_ep3);
+
+  // Auto-save filenames live in their own namespace so they cannot collide
+  // with the numbered $savechar slots. Format:
+  //   system/players/backup_player_<account_id>_auto_<unix_ts>.{psochar,pso3char}
+  static std::string auto_backup_character_filename(uint32_t account_id, uint64_t timestamp, bool is_ep3);
+  // Returns the path of the most recent auto-save for `account_id`, or an
+  // empty string if none exist.
+  static std::string find_latest_auto_backup(uint32_t account_id, bool is_ep3);
+  // Keep the `keep` most recent auto-saves for `account_id`; delete the rest.
+  static void prune_auto_backups(uint32_t account_id, bool is_ep3, size_t keep);
+
   std::string character_filename() const;
   std::shared_ptr<PSOBBCharacterFile> character_file(bool allow_load = true, bool allow_overlay = true);
   std::shared_ptr<const PSOBBCharacterFile> character_file(bool throw_if_missing = true, bool allow_overlay = true) const;
@@ -345,7 +359,11 @@ public:
   void save_all();
 
   void load_backup_character(uint32_t account_id, size_t index);
+  // Variant used by `$loadchar auto`: takes an explicit psochar path so the
+  // caller can pick a file from outside the (id, index) numbering scheme.
+  void load_backup_character_from_filename(const std::string& filename);
   std::shared_ptr<PSOGCEp3CharacterFile::Character> load_ep3_backup_character(uint32_t account_id, size_t index);
+  std::shared_ptr<PSOGCEp3CharacterFile::Character> load_ep3_backup_character_from_filename(const std::string& filename);
   void unload_character(bool save);
 
   void print_inventory() const;

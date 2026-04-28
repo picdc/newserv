@@ -3079,6 +3079,9 @@ static asio::awaitable<void> on_10(std::shared_ptr<Client> c, Channel::Message& 
   }
 }
 
+// Forward decl: definition lives near the on_61_98 handler that schedules it.
+static asio::awaitable<void> trigger_auto_save(std::shared_ptr<Client> c);
+
 static asio::awaitable<void> on_84(std::shared_ptr<Client> c, Channel::Message& msg) {
   const auto& cmd = check_size_t<C_LobbySelection_84>(msg.data);
   auto s = c->require_server_state();
@@ -3099,6 +3102,14 @@ static asio::awaitable<void> on_84(std::shared_ptr<Client> c, Channel::Message& 
     // back to another lobby if it's full.
     c->preferred_lobby_id = cmd.item_id;
     s->add_client_to_available_lobby(c, false);
+
+    // If on_61_98's 0x98 path scheduled an auto-save, fire it now that the
+    // client is in a stable lobby. Fire-and-forget: the round-trip with
+    // GetExtendedPlayerInfo can take 1-2s and shouldn't block on_84.
+    if (c->check_flag(Client::Flag::SHOULD_AUTO_SAVE)) {
+      c->clear_flag(Client::Flag::SHOULD_AUTO_SAVE);
+      asio::co_spawn(*s->io_context, trigger_auto_save(c), asio::detached);
+    }
 
   } else {
     // If the client already is in a lobby, then they're using the lobby teleporter; add them to the lobby they
@@ -3355,6 +3366,89 @@ static asio::awaitable<void> on_13_A7_V3_V4(std::shared_ptr<Client> c, Channel::
   }
 }
 
+// Number of timestamped auto-saves kept per account. Older ones are pruned on
+// each new auto-save. Hardcoded for now; promote to a config knob if needed.
+static constexpr size_t AUTO_SAVE_ROTATION_SLOTS = 5;
+
+// Versions where $savechar's full-info path (GetExtendedPlayerInfo RAM patch)
+// is supported. BB takes a different path (server already holds the file in
+// RAM) but still works with auto-save's logic via the same trigger_auto_save.
+static bool auto_save_supported_for_version(Version v) {
+  switch (v) {
+    case Version::DC_V2:
+    case Version::GC_NTE:
+    case Version::GC_V3:
+    case Version::GC_EP3_NTE:
+    case Version::GC_EP3:
+    case Version::XB_V3:
+    case Version::BB_V4:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Non-interactive equivalent of $savechar that writes to the auto-save
+// namespace. Errors are logged + surfaced to the player via HUD but never
+// thrown — an auto-save failure must not break the session.
+static asio::awaitable<void> trigger_auto_save(std::shared_ptr<Client> c) {
+  if (!c->login || !c->login->account) {
+    co_return;
+  }
+  uint32_t account_id = c->login->account->account_id;
+  bool ep3 = is_ep3(c->version());
+  uint64_t timestamp = static_cast<uint64_t>(time(nullptr));
+  std::string filename = Client::auto_backup_character_filename(account_id, timestamp, ep3);
+
+  try {
+    GetPlayerInfoResult ch;
+    if (c->version() == Version::BB_V4) {
+      ch.character = c->character_file();
+      ch.is_full_info = true;
+    } else {
+      ch = co_await send_get_player_info(c, true);
+    }
+
+    if (!ch.is_full_info) {
+      // Without the RAM patch we'd only have basic info, which doesn't include
+      // quest_flags. Skip the auto-save rather than write a half-baked file.
+      c->log.warning_f("Auto-save: did not receive full info; skipping write");
+      send_text_message(c, "$C6Auto-save skipped\n(no full info)");
+      co_return;
+    }
+
+    if (ep3 && ch.ep3_character) {
+      Client::save_ep3_character_file(filename, *ch.ep3_character);
+    } else if (ch.character) {
+      // Mirror $savechar's mask-based merge of server-tracked quest_flags so
+      // that $qset/$qclear and BIN gset/gclear changes since the last load
+      // override the client's RAM dump for those specific bits only.
+      auto server_char = c->character_file(false, false);
+      if (server_char) {
+        for (size_t diff = 0; diff < 4; ++diff) {
+          auto& dst = ch.character->quest_flags.data[diff].data;
+          const auto& src = server_char->quest_flags.data[diff].data;
+          const auto& mask = c->quest_flags_modified.data[diff].data;
+          for (size_t i = 0; i < dst.size(); ++i) {
+            dst[i] = (dst[i] & ~mask[i]) | (src[i] & mask[i]);
+          }
+        }
+      }
+      Client::save_character_file(filename, c->system_file(), ch.character);
+    } else {
+      c->log.warning_f("Auto-save: no character data to save");
+      co_return;
+    }
+
+    Client::prune_auto_backups(account_id, ep3, AUTO_SAVE_ROTATION_SLOTS);
+    c->log.info_f("Auto-save written: {}", filename);
+    send_text_message(c, "$C7Auto-save");
+  } catch (const std::exception& e) {
+    c->log.warning_f("Auto-save failed: {}", e.what());
+    send_text_message_fmt(c, "$C6Auto-save failed:\n{}", e.what());
+  }
+}
+
 static asio::awaitable<void> on_61_98(std::shared_ptr<Client> c, Channel::Message& msg) {
   auto s = c->require_server_state();
 
@@ -3375,6 +3469,15 @@ static asio::awaitable<void> on_61_98(std::shared_ptr<Client> c, Channel::Messag
     c->clear_flag(Client::Flag::SHOULD_SEND_ARTIFICIAL_OBJECT_STATE);
     c->clear_flag(Client::Flag::SHOULD_SEND_ARTIFICIAL_FLAG_STATE);
     c->clear_flag(Client::Flag::SHOULD_SEND_ARTIFICIAL_PLAYER_STATES);
+
+    // Schedule an auto-save for the next on_84 (when the client lands in a
+    // new lobby). We can't trigger it here because trigger_auto_save needs
+    // c->lobby to be valid for the BB path and for HUD message delivery.
+    if (c->login && c->login->account &&
+        auto_save_supported_for_version(c->version()) &&
+        !c->login->account->check_flag(Account::Flag::IS_SHARED_ACCOUNT)) {
+      c->set_flag(Client::Flag::SHOULD_AUTO_SAVE);
+    }
   }
 
   auto player = c->character_file();

@@ -555,6 +555,78 @@ std::string Client::backup_character_filename(uint32_t account_id, size_t index,
       account_id, index, is_ep3 ? "pso3char" : "psochar");
 }
 
+std::string Client::auto_backup_character_filename(uint32_t account_id, uint64_t timestamp, bool is_ep3) {
+  return std::format("system/players/backup_player_{}_auto_{}.{}",
+      account_id, timestamp, is_ep3 ? "pso3char" : "psochar");
+}
+
+// Helpers for the auto-backup filename namespace. Files look like:
+//   system/players/backup_player_<account_id>_auto_<unix_ts>.{psochar,pso3char}
+// The timestamp suffix is what gets sorted on (mtime is unreliable when
+// files get touched/copied across containers).
+namespace {
+struct AutoBackupEntry {
+  uint64_t timestamp;
+  std::filesystem::path path;
+};
+
+std::vector<AutoBackupEntry> collect_auto_backups(uint32_t account_id, bool is_ep3) {
+  std::string prefix = std::format("backup_player_{}_auto_", account_id);
+  std::string suffix = is_ep3 ? ".pso3char" : ".psochar";
+  std::vector<AutoBackupEntry> entries;
+  std::filesystem::path dir{"system/players"};
+  std::error_code ec;
+  if (!std::filesystem::is_directory(dir, ec)) {
+    return entries;
+  }
+  for (auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    std::string name = entry.path().filename().string();
+    if (name.size() <= prefix.size() + suffix.size()) {
+      continue;
+    }
+    if (name.compare(0, prefix.size(), prefix) != 0) {
+      continue;
+    }
+    if (name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) {
+      continue;
+    }
+    std::string ts_part = name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+    uint64_t ts = 0;
+    try {
+      ts = std::stoull(ts_part);
+    } catch (const std::exception&) {
+      continue;
+    }
+    entries.push_back({ts, entry.path()});
+  }
+  std::sort(entries.begin(), entries.end(),
+      [](const AutoBackupEntry& a, const AutoBackupEntry& b) { return a.timestamp > b.timestamp; });
+  return entries;
+}
+} // namespace
+
+std::string Client::find_latest_auto_backup(uint32_t account_id, bool is_ep3) {
+  auto entries = collect_auto_backups(account_id, is_ep3);
+  if (entries.empty()) {
+    return "";
+  }
+  return entries.front().path.string();
+}
+
+void Client::prune_auto_backups(uint32_t account_id, bool is_ep3, size_t keep) {
+  auto entries = collect_auto_backups(account_id, is_ep3);
+  if (entries.size() <= keep) {
+    return;
+  }
+  for (size_t i = keep; i < entries.size(); i++) {
+    std::error_code ec;
+    std::filesystem::remove(entries[i].path, ec);
+  }
+}
+
 std::string Client::character_filename() const {
   if (this->version() != Version::BB_V4) {
     throw std::logic_error("non-BB players do not have saved character filenames");
@@ -1087,6 +1159,10 @@ void Client::save_all() {
 
 void Client::load_backup_character(uint32_t account_id, size_t index) {
   std::string filename = this->backup_character_filename(account_id, index, false);
+  this->load_backup_character_from_filename(filename);
+}
+
+void Client::load_backup_character_from_filename(const std::string& filename) {
   this->character_data = PSOCHARFile::load_shared(filename, false).character_file;
   this->update_character_data_after_load(this->character_data);
   this->v1_v2_last_reported_disp.reset();
@@ -1098,6 +1174,10 @@ void Client::load_backup_character(uint32_t account_id, size_t index) {
 
 std::shared_ptr<PSOGCEp3CharacterFile::Character> Client::load_ep3_backup_character(uint32_t account_id, size_t index) {
   std::string filename = this->backup_character_filename(account_id, index, true);
+  return this->load_ep3_backup_character_from_filename(filename);
+}
+
+std::shared_ptr<PSOGCEp3CharacterFile::Character> Client::load_ep3_backup_character_from_filename(const std::string& filename) {
   auto ch = std::make_shared<PSOGCEp3CharacterFile::Character>(phosg::load_object_file<PSOGCEp3CharacterFile::Character>(filename));
   this->character_data = PSOBBCharacterFile::create_from_file(*ch);
   this->ep3_config = std::make_shared<Episode3::PlayerConfig>(ch->ep3_config);
