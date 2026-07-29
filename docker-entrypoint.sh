@@ -1,8 +1,9 @@
 #!/bin/sh
-# If config.json is missing (fresh volume mount), copy defaults
-if [ ! -f /newserv/system/config.json ]; then
-    echo "No config.json found, copying defaults from /newserv/system-defaults/..."
-    cp -rn /newserv/system-defaults/* /newserv/system/
-fi
+# Copy any default files missing from the volume (fresh mount, or files
+# added/moved by an upstream update since the volume was last populated).
+# cp -rn never overwrites files that already exist, so persistent data
+# (config.json, players/, teams/, licenses/) is left untouched.
+echo "Syncing missing defaults from /newserv/system-defaults/ into /newserv/system/..."
+cp -rn /newserv/system-defaults/* /newserv/system/
 
 exec "$@"
