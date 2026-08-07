@@ -2477,6 +2477,56 @@ asio::awaitable<GetPlayerInfoResult> send_get_player_info(std::shared_ptr<Client
   co_return co_await promise->get();
 }
 
+asio::awaitable<void> send_set_extended_player_info(
+    std::shared_ptr<Client> c, std::shared_ptr<const PSOBBCharacterFile> ch) {
+  if (!c->check_flag(Client::Flag::HAS_SEND_FUNCTION_CALL) ||
+      !c->check_flag(Client::Flag::SEND_FUNCTION_CALL_ACTUALLY_RUNS_CODE)) {
+    throw std::runtime_error("client does not support extended player info");
+  }
+  auto s = c->require_server_state();
+
+  auto push = [&]<typename CharT>(const CharT& char_file) -> asio::awaitable<void> {
+    co_await prepare_client_for_patches(c);
+    auto fn = s->data->client_functions->get("SetExtendedPlayerInfo", c->specific_version);
+    co_await send_function_call(c, fn, {}, &char_file, sizeof(CharT));
+    auto l = c->lobby.lock();
+    if (l) {
+      send_player_leave_notification(l, c->lobby_client_id);
+      s->send_lobby_join_notifications(l, c);
+    }
+  };
+
+  switch (c->version()) {
+    case Version::DC_V2: {
+      PSODCV2CharacterFile::Character dc_char = *ch;
+      co_await push(dc_char);
+      break;
+    }
+    case Version::GC_NTE: {
+      PSOGCNTECharacterFileCharacter gc_char = *ch;
+      co_await push(gc_char);
+      break;
+    }
+    case Version::GC_V3: {
+      PSOGCCharacterFile::Character gc_char = *ch;
+      co_await push(gc_char);
+      break;
+    }
+    case Version::XB_V3: {
+      if (!c->login || !c->login->xb_license) {
+        throw std::runtime_error("XB client is not logged in");
+      }
+      PSOXBCharacterFile::Character xb_char = *ch;
+      xb_char.guild_card.xb_user_id_high = (c->login->xb_license->user_id >> 32) & 0xFFFFFFFF;
+      xb_char.guild_card.xb_user_id_low = c->login->xb_license->user_id & 0xFFFFFFFF;
+      co_await push(xb_char);
+      break;
+    }
+    default:
+      throw std::logic_error("unimplemented extended player info version");
+  }
+}
+
 void send_execute_item_trade(std::shared_ptr<Client> c, const std::vector<ItemData>& items) {
   auto s = c->require_server_state();
 

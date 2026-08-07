@@ -3081,6 +3081,9 @@ static asio::awaitable<void> on_10(std::shared_ptr<Client> c, Channel::Message& 
 
 // Forward decl: definition lives near the on_61_98 handler that schedules it.
 static asio::awaitable<void> trigger_auto_save(std::shared_ptr<Client> c);
+// Forward decl: definition lives right after trigger_auto_save.
+static asio::awaitable<void> trigger_auto_load(std::shared_ptr<Client> c);
+static bool auto_load_supported_for_version(Version v);
 
 static asio::awaitable<void> on_84(std::shared_ptr<Client> c, Channel::Message& msg) {
   const auto& cmd = check_size_t<C_LobbySelection_84>(msg.data);
@@ -3109,6 +3112,18 @@ static asio::awaitable<void> on_84(std::shared_ptr<Client> c, Channel::Message& 
     if (c->check_flag(Client::Flag::SHOULD_AUTO_SAVE)) {
       c->clear_flag(Client::Flag::SHOULD_AUTO_SAVE);
       asio::co_spawn(*s->io_context, trigger_auto_save(c), asio::detached);
+    }
+
+    // Fire once per connection, right after the client's first stable lobby
+    // landing post-login: restore quest_flags from the most recent backup.
+    // Gated the same way as auto-save (real, non-shared account); doesn't
+    // wait on trigger_auto_save above, they're independent fire-and-forgets.
+    if (!c->check_flag(Client::Flag::AUTO_LOAD_ATTEMPTED) &&
+        c->login && c->login->account &&
+        auto_load_supported_for_version(c->version()) &&
+        !c->login->account->check_flag(Account::Flag::IS_SHARED_ACCOUNT)) {
+      c->set_flag(Client::Flag::AUTO_LOAD_ATTEMPTED);
+      asio::co_spawn(*s->io_context, trigger_auto_load(c), asio::detached);
     }
 
   } else {
@@ -3446,6 +3461,94 @@ static asio::awaitable<void> trigger_auto_save(std::shared_ptr<Client> c) {
   } catch (const std::exception& e) {
     c->log.warning_f("Auto-save failed: {}", e.what());
     send_text_message_fmt(c, "$C6Auto-save failed:\n{}", e.what());
+  }
+}
+
+// Versions where the login-time quest-flags auto-load below is supported —
+// the same non-BB, non-Ep3 subset that send_set_extended_player_info handles.
+// BB is excluded because its character_file already IS the persistent
+// server-side save (nothing to restore); Ep3 doesn't have story quest flags.
+static bool auto_load_supported_for_version(Version v) {
+  switch (v) {
+    case Version::DC_V2:
+    case Version::GC_NTE:
+    case Version::GC_V3:
+    case Version::XB_V3:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Fired once per connection (see on_84) right after the client lands in its
+// first stable lobby post-login. On DC v2 / GC / XB, a fresh connection's
+// quest_flags start empty in RAM (the normal 0x61/0x98 character exchange
+// doesn't carry them at all), so without this the player has to remember to
+// run `$loadchar auto` every session just to get AvailableIf gating and any
+// flag-gated quest logic working again.
+//
+// This restores quest_flags ONLY: it fetches the client's actual current RAM
+// state (not just whatever's cached in c->character_data), then individually
+// sets/clears each of the 4*0x400 quest_flags bits to match the most recent
+// backup on disk, leaving every other field (inventory, stats, appearance,
+// bank, ...) exactly as the live RAM had it. Because nothing else is ever
+// touched, this can't revert real progress no matter how much the character
+// has diverged from that backup since it was taken -- unlike $loadchar, which
+// restores the whole character struct verbatim.
+static asio::awaitable<void> trigger_auto_load(std::shared_ptr<Client> c) {
+  if (!c->login || !c->login->account) {
+    co_return;
+  }
+  uint32_t account_id = c->login->account->account_id;
+  auto s = c->require_server_state();
+  std::string filename = Client::find_most_recent_backup(account_id, s->data->num_backup_character_slots, false);
+  if (filename.empty()) {
+    c->log.info_f("Auto-load: no backup found for account {}; skipping", account_id);
+    co_return;
+  }
+
+  try {
+    auto ch = co_await send_get_player_info(c, true);
+    if (!ch.is_full_info || !ch.character) {
+      c->log.warning_f("Auto-load: did not receive full info; skipping");
+      co_return;
+    }
+
+    auto backup = PSOCHARFile::load_shared(filename, false).character_file;
+
+    bool any_bit_differs = false;
+    for (uint8_t diff_index = 0; diff_index < 4; diff_index++) {
+      auto difficulty = static_cast<Difficulty>(diff_index);
+      for (size_t flag_num = 0; flag_num < 0x400; flag_num++) {
+        bool backup_set = backup->quest_flags.get(difficulty, flag_num);
+        if (backup_set == ch.character->quest_flags.get(difficulty, flag_num)) {
+          continue;
+        }
+        any_bit_differs = true;
+        if (backup_set) {
+          ch.character->quest_flags.set(difficulty, flag_num);
+        } else {
+          ch.character->quest_flags.clear(difficulty, flag_num);
+        }
+      }
+    }
+
+    if (!any_bit_differs) {
+      c->log.info_f("Auto-load: quest flags already match backup {}; nothing to do", filename);
+      co_return;
+    }
+
+    co_await send_set_extended_player_info(c, ch.character);
+
+    // Adopt the merged character as the server's view (so AvailableIf
+    // evaluates correctly immediately) and reset the modified-bits mask, same
+    // as load_backup_character_from_filename does for $loadchar.
+    c->adopt_character_data(ch.character);
+
+    c->log.info_f("Auto-load: quest flags restored from {}", filename);
+    send_text_message(c, "$C7Quest flags\nauto-loaded");
+  } catch (const std::exception& e) {
+    c->log.warning_f("Auto-load failed: {}", e.what());
   }
 }
 

@@ -94,6 +94,9 @@ public:
 
     // Auto-save bookkeeping (server-side only; see ReceiveCommands.cc on_61_98 / on_84)
     SHOULD_AUTO_SAVE                           = 0x0000200000000000,
+    // Set once the login-time quest-flags auto-load has been attempted for
+    // this connection, so it only ever runs once (see ReceiveCommands.cc on_84).
+    AUTO_LOAD_ATTEMPTED                        = 0x0000400000000000,
     // clang-format on
   };
   enum class ItemDropNotificationMode {
@@ -321,6 +324,11 @@ public:
   static std::string find_latest_auto_backup(uint32_t account_id, bool is_ep3);
   // Keep the `keep` most recent auto-saves for `account_id`; delete the rest.
   static void prune_auto_backups(uint32_t account_id, bool is_ep3, size_t keep);
+  // Returns the path of the most recently written backup for `account_id`,
+  // considering both the numbered $savechar slots (0..num_slots) and the
+  // auto-save namespace, compared by filesystem mtime. Empty string if none
+  // exist. Used by the login-time quest-flags auto-load.
+  static std::string find_most_recent_backup(uint32_t account_id, size_t num_slots, bool is_ep3);
 
   std::string character_filename() const;
   std::shared_ptr<PSOBBCharacterFile> character_file(bool allow_load = true, bool allow_overlay = true);
@@ -365,6 +373,13 @@ public:
   std::shared_ptr<PSOGCEp3CharacterFile::Character> load_ep3_backup_character(uint32_t account_id, size_t index);
   std::shared_ptr<PSOGCEp3CharacterFile::Character> load_ep3_backup_character_from_filename(const std::string& filename);
   void unload_character(bool save);
+  // Adopts `ch` as this client's current character data and resets
+  // quest_flags_modified to all-zero, same as after
+  // load_backup_character_from_filename. Used when the caller already has a
+  // complete character snapshot in hand (e.g. from a GetExtendedPlayerInfo
+  // fetch) rather than loading one from a backup file on disk — see
+  // ReceiveCommands.cc's login-time quest-flags auto-load.
+  void adopt_character_data(std::shared_ptr<PSOBBCharacterFile> ch);
 
   void print_inventory() const;
   void print_bank() const;

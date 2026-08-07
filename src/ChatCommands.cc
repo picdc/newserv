@@ -1595,17 +1595,26 @@ ChatCommandDefinition cc_loadchar(
       } else if ((a.c->version() == Version::DC_V2) ||
           (a.c->version() == Version::GC_NTE) ||
           (a.c->version() == Version::GC_V3) ||
-          (a.c->version() == Version::GC_EP3_NTE) ||
-          (a.c->version() == Version::GC_EP3) ||
           (a.c->version() == Version::XB_V3)) {
         // TODO: Support extended player info on other versions
+        try {
+          co_await send_set_extended_player_info(a.c, a.c->character_file());
+        } catch (const std::exception& e) {
+          a.c->log.warning_f("Failed to set extended player info: {}", e.what());
+          throw precondition_failed("Failed to set\nplayer info:\n{}", e.what());
+        }
+
+      } else if ((a.c->version() == Version::GC_EP3_NTE) || (a.c->version() == Version::GC_EP3)) {
+        // Ep3 characters carry a different (non-PSOBBCharacterFile) shape, so
+        // they can't go through send_set_extended_player_info; keep this path
+        // bespoke here.
         auto s = a.c->require_server_state();
         if (!a.c->check_flag(Client::Flag::HAS_SEND_FUNCTION_CALL) ||
             !a.c->check_flag(Client::Flag::SEND_FUNCTION_CALL_ACTUALLY_RUNS_CODE)) {
           throw precondition_failed("Can\'t load character\ndata on this game\nversion");
         }
 
-        auto send_set_extended_player_info = [&a, &s]<typename CharT>(const CharT& char_file) -> asio::awaitable<void> {
+        auto push_ep3 = [&a, &s]<typename CharT>(const CharT& char_file) -> asio::awaitable<void> {
           co_await prepare_client_for_patches(a.c);
           try {
             auto fn = s->data->client_functions->get("SetExtendedPlayerInfo", a.c->specific_version);
@@ -1621,30 +1630,11 @@ ChatCommandDefinition cc_loadchar(
           }
         };
 
-        if (a.c->version() == Version::DC_V2) {
-          PSODCV2CharacterFile::Character dc_char = *a.c->character_file();
-          co_await send_set_extended_player_info(dc_char);
-        } else if (a.c->version() == Version::GC_NTE) {
-          PSOGCNTECharacterFileCharacter gc_char = *a.c->character_file();
-          co_await send_set_extended_player_info(gc_char);
-        } else if (a.c->version() == Version::GC_V3) {
-          PSOGCCharacterFile::Character gc_char = *a.c->character_file();
-          co_await send_set_extended_player_info(gc_char);
-        } else if (a.c->version() == Version::GC_EP3_NTE) {
+        if (a.c->version() == Version::GC_EP3_NTE) {
           PSOGCEp3NTECharacter nte_char = *ep3_char;
-          co_await send_set_extended_player_info(nte_char);
-        } else if (a.c->version() == Version::GC_EP3) {
-          co_await send_set_extended_player_info(*ep3_char);
-        } else if (a.c->version() == Version::XB_V3) {
-          if (!a.c->login || !a.c->login->xb_license) {
-            throw std::runtime_error("XB client is not logged in");
-          }
-          PSOXBCharacterFile::Character xb_char = *a.c->character_file();
-          xb_char.guild_card.xb_user_id_high = (a.c->login->xb_license->user_id >> 32) & 0xFFFFFFFF;
-          xb_char.guild_card.xb_user_id_low = a.c->login->xb_license->user_id & 0xFFFFFFFF;
-          co_await send_set_extended_player_info(xb_char);
+          co_await push_ep3(nte_char);
         } else {
-          throw std::logic_error("unimplemented extended player info version");
+          co_await push_ep3(*ep3_char);
         }
 
       } else {

@@ -301,6 +301,14 @@ void send_self_leave_notification(std::shared_ptr<Client> c);
 
 asio::awaitable<GetPlayerInfoResult> send_get_player_info(std::shared_ptr<Client> c, bool request_extended = false);
 
+// Pushes `ch` into the client's RAM via the SetExtendedPlayerInfo client
+// function (DC_V2, GC_NTE, GC_V3, XB_V3 only). Throws if the client doesn't
+// support the RAM-patch path or the push itself fails. If the client is
+// currently in a lobby, also re-sends the join notification so the new data
+// takes visible effect (mirrors what $loadchar does).
+asio::awaitable<void> send_set_extended_player_info(
+    std::shared_ptr<Client> c, std::shared_ptr<const PSOBBCharacterFile> ch);
+
 void send_execute_item_trade(std::shared_ptr<Client> c, const std::vector<ItemData>& items);
 void send_execute_card_trade(
     std::shared_ptr<Client> c, const std::vector<std::pair<uint32_t, uint32_t>>& card_to_count);

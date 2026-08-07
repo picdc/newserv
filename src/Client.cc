@@ -627,6 +627,38 @@ void Client::prune_auto_backups(uint32_t account_id, bool is_ep3, size_t keep) {
   }
 }
 
+std::string Client::find_most_recent_backup(uint32_t account_id, size_t num_slots, bool is_ep3) {
+  std::filesystem::path best_path;
+  std::filesystem::file_time_type best_mtime;
+  bool have_best = false;
+
+  auto consider = [&](const std::string& filename) {
+    std::error_code ec;
+    std::filesystem::path path{filename};
+    if (!std::filesystem::is_regular_file(path, ec)) {
+      return;
+    }
+    auto mtime = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+      return;
+    }
+    if (!have_best || (mtime > best_mtime)) {
+      best_path = path;
+      best_mtime = mtime;
+      have_best = true;
+    }
+  };
+
+  for (size_t index = 0; index < num_slots; index++) {
+    consider(Client::backup_character_filename(account_id, index, is_ep3));
+  }
+  for (const auto& entry : collect_auto_backups(account_id, is_ep3)) {
+    consider(entry.path.string());
+  }
+
+  return have_best ? best_path.string() : "";
+}
+
 std::string Client::character_filename() const {
   if (this->version() != Version::BB_V4) {
     throw std::logic_error("non-BB players do not have saved character filenames");
@@ -1167,6 +1199,13 @@ void Client::load_backup_character_from_filename(const std::string& filename) {
   this->update_character_data_after_load(this->character_data);
   this->v1_v2_last_reported_disp.reset();
   // The freshly-loaded character_file is the new baseline for $savechar's merge.
+  for (size_t i = 0; i < this->quest_flags_modified.data.size(); i++) {
+    this->quest_flags_modified.data[i].update_all(false);
+  }
+}
+
+void Client::adopt_character_data(std::shared_ptr<PSOBBCharacterFile> ch) {
+  this->character_data = std::move(ch);
   for (size_t i = 0; i < this->quest_flags_modified.data.size(); i++) {
     this->quest_flags_modified.data[i].update_all(false);
   }
