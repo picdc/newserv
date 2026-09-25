@@ -13,9 +13,9 @@
 
 entry_ptr:
 reloc0:
-  .offsetof start
+  .data     start
 start:
-  .include  WriteCodeBlocksDC
+  .include  WriteCodeBlocks
 
   .align    4
   .data     <VERS 0x8C02BBA0 0x8C02BBA0 0x8C02BBA0 0x8C02BBA0 0x8C02BBA0>

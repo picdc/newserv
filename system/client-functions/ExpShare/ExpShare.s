@@ -58,9 +58,9 @@
 
 entry_ptr:
 reloc0:
-  .offsetof start
+  .data     start
 start:
-  .include  WriteCodeBlocksDC
+  .include  WriteCodeBlocks
 
   # Block 1 : overwrite function epilogue at 0x8C012980 (12 bytes)
   #
