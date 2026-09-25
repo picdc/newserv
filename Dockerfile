@@ -82,6 +82,7 @@ COPY --from=data /newserv/system ./system-defaults
 COPY --from=data /newserv/system ./system
 COPY --from=newserv /usr/local /usr/local
 COPY docker-entrypoint.sh /usr/local/bin/
+COPY docker-defaults-history.sha256 /newserv/defaults-history.sha256
 
 USER root
 VOLUME /newserv/system
